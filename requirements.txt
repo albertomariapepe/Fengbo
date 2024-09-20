@@ -1,0 +1,9 @@
+vtk
+meshio
+neuraloperator
+wandb
+torch_harmonics
+prettytable
+clifford
+open3d
+Werkzeug==2.3.2 
