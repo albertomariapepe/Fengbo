@@ -1,1 +1,1 @@
-repo for the paper "Fengbo: a neural operator pipeline in Clifford Algebra for Computational Fluid Dynamics"
+repo for the paper "Fengbo: a Neural Operator pipeline in Clifford Algebra for Computational Fluid Dynamics"
