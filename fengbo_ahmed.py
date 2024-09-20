@@ -1,14 +1,21 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
+from clifford.g3 import *
+import open3d as o3d
+from CGENNs.algebra.cliffordalgebra import CliffordAlgebra
+from cliffordlayers.cliffordlayers.models.utils import partialclass
+from cliffordlayers.cliffordlayers.nn.modules.cliffordconv import CliffordConv1d
+from cliffordlayers.cliffordlayers.models.basic.threed import (
+    CliffordMaxwellNet3d,
+    CliffordConv3d,
+    CliffordFourierBasicBlock3d
+)
+from cliffordlayers.cliffordlayers.nn.modules.cliffordfourier import CliffordSpectralConv3d
+from typing import Callable, Union
+from cliffordlayers.cliffordlayers.nn.modules.batchnorm import CliffordBatchNorm3d
+from cliffordlayers.cliffordlayers.nn.modules.groupnorm import CliffordGroupNorm3d
+import torch.nn.functional as F
 import vtk
-import re
 import numpy as np
 import torch
-from vtk.util.numpy_support import vtk_to_numpy
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
 from datetime import datetime
@@ -22,31 +29,17 @@ from neuralop.models import TFNO
 from prettytable import PrettyTable
 from typing import Tuple
 import os
-import open3d as o3d
+import sys
+import gc
+import math
 
-
-
-
-#source ~/anaconda3/etc/profile.d/conda.sh to activate environmene
-#conda activate cliffordlayers
-
-
-# In[2]:
 
 
 import sys
-#sys.stdout = open('log3_2.log', 'w+')
 
 
 SEED  = 1
 random.seed(SEED)
-# In[3]:
-
-
-
-
-# In[4]:
-
 
 def count_parameters(model):
     table = PrettyTable(["Modules", "Parameters"])
@@ -63,10 +56,7 @@ def count_parameters(model):
     return total_params
 
 
-# In[5]:
-
-
-#This function is used to map our input point cloud N x 3, with N about 3.6k points
+#This function is used to map our input point cloud N x 3, with N about 100k points
 #into a regular grid M x M x M x 3, with resolution M. This is done in analogy with the GINO pipeline and because
 #the fourier neural operator needs a spatial grid in input
 
@@ -108,13 +98,6 @@ def encode_point_cloud(point_cloud, grid_size, press, velo, biv):
     return velo, grid, bivectors, mask, pressure.squeeze()
 
 
-
-
-
-
-# In[6]:x
-
-
 #used for plotting 3D point clouds with equal x - y - z axes.
 
 def axisEqual3D(ax):
@@ -127,13 +110,6 @@ def axisEqual3D(ax):
         getattr(ax, 'set_{}lim'.format(dim))(ctr - r, ctr + r)
 
 
-# In[7]:
-
-
-# In[8]:
-
-
-from clifford.g3 import *
 
 
 def calculate_dual(points):
@@ -169,7 +145,6 @@ def calculate_dual(points):
 # included. I might email them about it.
 
 
-# In[9]:
 
 
 M = 80
@@ -224,28 +199,11 @@ for root, dirs, files in os.walk(traindatapath):
             #print(press)
 
             pressures.append(press)
-            #print(press.shape)
+    
 
             RN = torch.load(root + '/info' + name[4:-3] + 'pt')
-            print(RN)
 
-            
-            '''
-            fig=plt.figure(figsize=(5,5))
-            ax = fig.add_subplot(projection = "3d")
-            # Plot the points
-            ss = ax.scatter(centroids[:, 2], centroids[:, 0], centroids[:, 1], c = press, marker='o', s=8)
-            ax.set_title('Sanity Check - Grid must be equal to PC')
-            axisEqual3D(ax)
-            plt.colorbar(ss)
-            plt.show()
-            plt.savefig("PLOT_PRESS_VAL_ahmed" + str(i) + ".png")
-            
-            if i > 2:
-                break
-            '''
 
-            #print("***")
 
             tensor = torch.load(root + '/info' + name[4:-3] + 'pt')
 
@@ -254,7 +212,6 @@ for root, dirs, files in os.walk(traindatapath):
 
             velocities.append(velo)
 
-            #Xtrain[i,:,:,:,0], Xtrain[i,:,:,:,1:], Ytrain[i,:,:,:,0]  = encode_point_cloud(points, M, press, velo)
             i += 1
             
 
@@ -304,19 +261,14 @@ def normalize_pressure(point_clouds):
 
 
 normalized_point_clouds = np.array(normalize_point_clouds(point_clouds))
-#normalized_point_clouds = point_clouds
 normalized_pressures, MU, STD = np.array(normalize_pressure(pressures))
 
-
-#normalized_pressures = np.array(pressures)
 
 velocities = np.array(velocities)
 vel_min = np.min(velocities)
 vel_max = np.max(velocities)
 velocities = (velocities - vel_min)/(vel_max - vel_min)
 
-#print(normalized_pressures[0])
-print("Hello")
 
 for i in range(len(normalized_point_clouds)):
     Xtrain[i,:,:,:,0], Xtrain[i,:,:,:,1:4], Xtrain[i,:,:,:,4:7], Xtrain[i,:,:,:,7], Ytrain[i,:,:,:,0]  = encode_point_cloud(normalized_point_clouds[i], M, normalized_pressures[i], velocities[i], bivectors[i])
@@ -340,8 +292,6 @@ for IDX in range(3):
     plt.colorbar(ss)
     plt.show()
     plt.savefig("PLOT_PRESS_TRAIN_ahmed" + str(IDX) + ".png")
-
-print("DONE")
 
 
 Xtest = np.zeros((51, M, M, M, 8))
@@ -382,33 +332,12 @@ for root, dirs, files in os.walk(traindatapath):
                 centroid = (points[v1] + points[v2] + points[v3]) / 3.0
                 centroids[k] = centroid
 
-            #print(root + '/' + name)
-            #print(root + '/press' + name[4:-3] + 'npy')
             point_clouds.append(centroids)
 
             press = np.load(root + '/press' + name[4:-3] + 'npy')
             #print(press)
 
             pressures.append(press)
-            #print(press.shape)
-
-            
-            '''
-            fig=plt.figure(figsize=(5,5))
-            ax = fig.add_subplot(projection = "3d")
-            # Plot the points
-            ss = ax.scatter(centroids[:, 2], centroids[:, 0], centroids[:, 1], c = press, marker='o', s=8)
-            ax.set_title('Sanity Check - Grid must be equal to PC')
-            axisEqual3D(ax)
-            plt.colorbar(ss)
-            plt.show()
-            plt.savefig("PLOT_PRESS_VAL_ahmed" + str(i) + ".png")
-            
-            if i > 2:
-                break
-            '''
-
-            #print("***")
 
             tensor = torch.load(root + '/info' + name[4:-3] + 'pt')
 
@@ -418,9 +347,6 @@ for root, dirs, files in os.walk(traindatapath):
             velocities.append(velo)
 
             i += 1
-
-
-
 
 
 normalized_point_clouds = np.array(normalize_point_clouds(point_clouds))
@@ -452,53 +378,17 @@ for IDX in range(3):
 print("DONE")
 
 
-from CGENNs.algebra.cliffordalgebra import CliffordAlgebra
-
-
-from cliffordlayers.cliffordlayers.models.utils import partialclass
-from cliffordlayers.cliffordlayers.nn.modules.cliffordconv import CliffordConv1d
-from cliffordlayers.cliffordlayers.models.basic.threed import (
-    CliffordMaxwellNet3d,
-    CliffordConv3d,
-    CliffordFourierBasicBlock3d
-)
-
-from cliffordlayers.cliffordlayers.nn.modules.cliffordfourier import CliffordSpectralConv3d
-
-from typing import Callable, Union
-from cliffordlayers.cliffordlayers.nn.modules.batchnorm import CliffordBatchNorm3d
-from cliffordlayers.cliffordlayers.nn.modules.groupnorm import CliffordGroupNorm3d
-
-import torch.nn.functional as F
-
-
-# In[15]:
-
-
 #defining the algebra, we work in 3D with signature 1 1 1 (i.e. 3 basis vectors, e1, e2 and e3 that all square to 1)
 algebra = CliffordAlgebra((1., 1., 1.))
 
 
-# In[16]:
-
-
-import gc
-import math
-
 #using the GPU
-
 gc.collect()
 torch.cuda.empty_cache() 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}', flush = True)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
-
-
 num_gpus = 3
-
-# In[17]:
-
-
 
 class Net(nn.Module):
     def __init__(self):
@@ -551,23 +441,9 @@ class Net(nn.Module):
       self.conv2 = CliffordConv3d(g=[1, 1, 1], in_channels=2, out_channels=1, kernel_size=5, padding=2, stride = 1)
       self.conv3 = CliffordConv3d(g=[1, 1, 1], in_channels=1, out_channels=1, kernel_size=5, padding=2, stride = 1)
 
-
- 
-
-
-
-
-
     def forward(self, x):
       
-      #scalar part of the input, we embed it in the 3D GA with grade 0 (i.e. scalar). It's our SDF.
-      #bivector part of the input, we embed it in the 3D GA with grade 2 (i.e. bivector). It's the dual of the point cloud.
-      #x_b = algebra.embed_grade(x[:,:,:,:,:,3:6], grade= 2)
-
-      #first pair of convolution + batchnorm. We downsample the volume and normalize the output.
-      
-      #we consider only vector + bivector part to pass it through the FNO
-      #x_s = x_s.unsqueeze(1)
+ 
       x_v = algebra.embed_grade(x[:,:,:,:,1:4].unsqueeze(1), grade= 1)
       x_b = algebra.embed_grade(x[:,:,:,:,4:7].unsqueeze(1), grade= 2)
       x_s1 = algebra.embed_grade(x[:,:,:,:,0].unsqueeze(4), grade = 3)
@@ -611,15 +487,6 @@ class Net(nn.Module):
       x = self.conv3(x)
       out_s = x 
       
-      
-
-    
-      #out_s = torch.clone(out)
-      #out_v = torch.clone(out)
-      #x_v = algebra.embed_grade(x1[:,:,:,:,:,0:3], grade = 1)
-      #x_b = algebra.embed_grade(x1[:,:,:,:,:,3:], grade = 2)
-
-
       out_s = out_s * x_mask
 
     
@@ -629,9 +496,6 @@ class Net(nn.Module):
 
 
       return out
-
-
-# In[18]:
 
 
 model1 = Net()
@@ -645,9 +509,6 @@ if num_gpus >= 1:
 
 #counting the number of trainable parameters
 count_parameters(model)
-
-
-# In[20]:
 
 
 #defining hyperparameters
@@ -673,8 +534,6 @@ torch.manual_seed(SEED)
 model = model.to(device)
 
 
-# In[21]:
-
 
 def unison_shuffled_copies(a, b):
     assert len(a) == len(b)
@@ -682,7 +541,6 @@ def unison_shuffled_copies(a, b):
     return a[p], b[p]
 
 
-# In[22]:
 
 
 tensorX = torch.Tensor(Xtrain)
@@ -725,41 +583,16 @@ for IDX in range(3):
 
 
 
-# In[24]:
-
-'''
-print("PRESS l2 NORM after the embedding: ")
-for k in range(500):
-    ten = (tensorY[k, :, :, :, 0]).reshape((-1, M**3))
-    print(torch.linalg.norm(ten , ord = 2,  dim = [0, 1]))
-
-print("VELO l2 NORM after the embedding: ")
-for k in range(611):
-    ten = (tensorY[k, :, :, :, 1:]).reshape((-1, M**3, 3))
-    print(torch.linalg.norm(ten, ord = 2,  dim = [0, 1]))
-'''
 lambda_l1 = 1e-5
 
 optimizer = torch.optim.Adam(model.parameters(), lr=float(lr), weight_decay=0)
-#scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', threshold=0.1, factor=0.9, patience=30)
-
 total_steps = epochs * len(traindataloader)
 
 #define how the learning rate decreases
-#scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-6)
-
-'''
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer=optimizer, mode="min", patience=5, factor=0.5, verbose=True,
-        )
-'''
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', threshold=0.1, factor=0.5, patience=20)
 
 iters = len(traindataloader)
 
-
-
-# In[25]:
 
 
 #defining the loss function, just as in GINO. Same metric is used for measuring the error.
@@ -819,8 +652,6 @@ def loss_pressure_analytic(output, target, mu, stand, mask):
 pressure = 10e9
 
 
-# In[26]:
-
 
 #training loop
 timestamp = datetime.now().strftime('%Y%m%d')
@@ -852,17 +683,13 @@ for epoch in range(epochs):
 
     start = time.time()
     model.train()
-    #torch.set_grad_enabled(True)
     for i, data in enumerate(traindataloader):
         
         x, y = data
 
         x = x.to(device)
 
-        #print(x.shape)
 
-        #print(torch.max(x[:,:,:,:,:,0:3]), torch.min(x[:,:,:,:,:,0:3]))
-        #print(torch.max(x[:,:,:,:,:,6]), torch.min(x[:,:,:,:,:,6]))
         y = y.to(device)
             
         torch.cuda.empty_cache()
@@ -879,25 +706,13 @@ for epoch in range(epochs):
 
         
         loss = torch.mean(LP) + lambda_l1*l1_norm + loss_fn(pred, y)
-        #loss = loss_fn(pred, y)
-
         optimizer.zero_grad()
         loss.backward()
-
-
-        #grad_l2norm, grad_maxnorm = grad_norm(model)
   
         optimizer.step()
-        #scheduler.step(epoch + i / iters)
-        
-        #scheduler.step()
-        
+
         running_loss += loss.item()
         running_pressureloss += torch.mean(LP).item()
-
-
-        
-
 
         if i % 10  == 9:
             avg_loss = running_loss / 10 # loss per batch
@@ -941,7 +756,6 @@ for epoch in range(epochs):
 
     
     scheduler.step(avg_vloss)
-    #scheduler.step()
     
     for param_group in optimizer.param_groups:
         print(param_group['lr'], flush = True)
@@ -965,7 +779,6 @@ for epoch in range(epochs):
     if avg_pressureloss_v < best_pressureloss:
         best_pressureloss = avg_pressureloss_v
         strike = 0
-        #model_path = 'trainedmodels/model_{}_{}_{}_{}'.format(batchsize, SEED, epoch, timestamp)
         model_path = 'trainedmodels/model_' + str(M) + '_ahmed'
         torch.save(model.state_dict(), model_path)
         
@@ -974,9 +787,6 @@ for epoch in range(epochs):
         
     if strike == patience:
         break
-
-
-# In[ ]:
 
 
 fig=plt.figure(figsize=(8,8))
@@ -990,9 +800,6 @@ plt.legend()
 plt.show()
 plt.savefig('losses_ahmed.png')
 plt.savefig('losses_ahmed.pdf')
-
-
-# In[ ]:
 
 
 #testing
@@ -1026,19 +833,6 @@ with torch.no_grad():
         y = y.to(device)
 
         predY = model(x)
-        #y = encoder.encode(y)
-        #denormalizing the predicted pressure values
-        
-        '''
-        predY[:,:,:,:,0] = (predY[:,:,:,:,0] * std_press_v) + mu_press_v
-        y[:,:,:,:,0] = (y[:,:,:,:,0] * std_press_v) + mu_press_v
-
-        predY[:,:,:,:,1:] = (predY[:,:,:,:,1:] * std_velo_v) + mu_velo_v
-        y[:,:,:,:,1:] = (y[:,:,:,:,1:] * std_velo_v) + mu_velo_v
-        '''
-        #predY = (predY*std) + mu
-        #y = (y*std) + mu
-
 
         print(y.shape)
         print(predY.shape)
@@ -1046,16 +840,6 @@ with torch.no_grad():
     
         
         totloss +=torch.mean(loss_pressure(predY, y))
-
-        '''
-        r = loss_velocity(predY, y) / loss_pressure(predY, y)
-        alpha = r/ (1+r)
-        alpha_list.append(alpha)
-
-        beta = 1 - alpha
-
-        beta_list.append(beta)
-        '''
 
 
          
@@ -1082,21 +866,10 @@ with torch.no_grad():
 
         
         totloss +=torch.mean(loss_pressure(predY, y))
-        '''
-        r = loss_velocity(predY, y) / loss_pressure(predY, y)
-        alpha = r/ (1+r)
-        alpha_list.append(alpha)
 
-        beta = 1 - alpha
-
-        beta_list.append(beta)
-        '''
 
 
 print(f"total error PRESSURE - denorm: {100*totloss/(i+1)} %")
-
-
-# In[ ]:
 
 
 totloss = 0
@@ -1109,25 +882,12 @@ with torch.no_grad():
         y = y.to(device)
 
         predY = model(x)
-       
-        #predY = encoder.decode(predY)
-        #y = encoder.decode(y)
-
-
-
-
-        #print(y)
-        #print(predY)
-        #print("****")
-
 
         totloss += torch.mean(loss_pressure(predY, y))
          
        
 print(f"TRAIN total error - norm: {100*totloss/(i+1)} %")
 
-
-# In[ ]:
 
 
 totloss = 0
@@ -1151,24 +911,13 @@ with torch.no_grad():
         predY[:,:,:,:,0] = (predY[:,:,:,:,0] * (scalar*STD)) + (MU * scalar)
         y[:,:,:,:,0] = (y[:,:,:,:,0] * (scalar*STD)) + (MU * scalar)
        
-   
 
-        #predY = (predY*std) + mu
-        #y = (y*std) + mu
-
-
-        #print(y[0])
-        #print(predY[0])
-        #print("****")
 
 
         totloss += torch.mean(loss_pressure(predY, y))
          
        
 print(f"TRAIN total error - denorm: {100*totloss/(i+1)} %")
-
-
-# In[ ]:
 
 
 import matplotlib.pyplot as plt
