@@ -29,7 +29,7 @@ This combination allows for a direct mapping from input geometries to the corres
 To install and set up Fengbo, follow these steps:
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/fengbo.git
+git clone https://github.com/albertomariapepe/Fengbo.git
 pip install -r requirements.txt
 ```
 
